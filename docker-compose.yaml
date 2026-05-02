@@ -1,0 +1,21 @@
+services:
+  db:
+    container_name: viral_postgres_container
+    image: postgres:17.9-alpine3.22
+    ports:
+      - 5000:5432
+    environment:
+      POSTGRES_DB: db
+      POSTGRES_USER: db_user
+      POSTGRES_PASSWORD: db_password
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - my-network
+
+networks:
+  my-network:
+    driver: bridge
+
+volumes:
+  pgdata:

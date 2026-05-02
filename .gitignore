@@ -216,3 +216,8 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+hello.py
+qdrant_example.py
+channels.csv
+channel.json
