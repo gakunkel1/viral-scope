@@ -14,3 +14,13 @@ class Channel(BaseModel):
     hidden_subscriber_count: bool
     video_count: int
     uploads_playlist_id: str
+    ingested_at: datetime
+    
+class UploadPlaylist(BaseModel):
+    channel_id: str
+    channel_handle: str
+    uploads_playlist_id: str
+    
+class Video(BaseModel):
+    title: str
+    url: str

@@ -1,9 +1,10 @@
 from youtube.auth import Config
 from googleapiclient.discovery import build
+from datetime import datetime, UTC
 from pprint import pprint
 import json
 
-from models.channels import Channel
+from models.youtube import Channel
 
 def get_uploads_playlist_by_channel_id(
     id: str = "UC_x5XG1OV2P6uZZ5FSM9Ttw"
@@ -62,7 +63,13 @@ def get_channel_details_by_handle(
     
     # execute request
     response = request.execute()
+    
+    # save ingestion timestamp
+    ingested_at = datetime.now(UTC)
+    
+    pprint(response)
 
+    # parse response
     id = response['items'][0]['id']
     title = response['items'][0]['snippet']['title']
     description = response['items'][0]['snippet']['description']
@@ -87,5 +94,6 @@ def get_channel_details_by_handle(
         subscriber_count=subscriber_count,
         hidden_subscriber_count=hidden_subscriber_count,
         video_count=video_count,
-        uploads_playlist_id=uploads_playlist_id
+        uploads_playlist_id=uploads_playlist_id,
+        ingested_at=ingested_at
     )
