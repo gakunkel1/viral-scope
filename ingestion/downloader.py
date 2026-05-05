@@ -7,29 +7,9 @@ from datetime import datetime
 import yt_dlp
 
 from ingestion.storage import StorageBackend, get_storage_backend
+from models.youtube import VideoMetadata
 
 logger = logging.getLogger(__name__)
-
-# Metadata schema
-class VideoMetadata(BaseModel):
-    """
-    Structured representation of yt-dlp data for video.
-    """
-    video_id: str
-    title: str
-    channel: str
-    channel_id: str
-    duration_seconds: int
-    view_count: int
-    like_count: Optional[int]
-    comment_count: Optional[int]
-    upload_date: str # YYYYMMDD
-    description: str
-    tags: list[str] = Field(default_factory=list)
-    webpage_url: str = ""
-    ext: str = "mp4"
-    storage_uri: str = "" # After saving
-    ingested_at: Optional[datetime] = None
 
 # Request best video at 720p or below + best m4a audio, then best single file mp4, then "best"
 # mp4 and 720p offers greatest compatibility and reduces processing overhead
@@ -70,7 +50,7 @@ class VideoDownloader:
     def __init__(
         self,
         storage: Optional[StorageBackend] = None,
-        tmp_dir: str = "/tmp/viral-scope"
+        tmp_dir: str = "data/tmp",
     ):
         self.storage = storage or get_storage_backend()
         self.tmp_dir = Path(tmp_dir)

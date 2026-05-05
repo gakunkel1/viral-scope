@@ -23,3 +23,17 @@ Viral Scope is an AI-powered influencer content intelligence agent that ingests 
 ## Tool Execution
 - Virality score calculator
 - Content similarity search
+
+
+# Instructions
+
+## PostgreSQL and Prefect
+0. sudo apt install ffmpeg
+1. docker compose up -d
+2. docker exec -it viral_postgres_container psql -U db_user -d db -c "CREATE DATABASE prefect;"
+3. prefect init
+4. prefect server start
+5. prefect worker start --pool local-pool
+6. prefect deploy --all
+7. prefect gcl create video-ingestion --limit 1
+8. prefect gcl create video-transcription --limit 1

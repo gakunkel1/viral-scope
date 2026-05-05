@@ -19,24 +19,33 @@ push: null
 # this project in remote locations
 pull:
 - prefect.deployments.steps.set_working_directory:
-    directory: C:\dev\viral-scope
+    directory: /home/gabri/viral-scope
 
 # the deployments section allows you to provide configuration
 # for deploying flows
 deployments:
-- name: demo-deployment
+- name: download-videos
   version: null
   tags: []
-  concurrency_limit: null
   description: null
-  entrypoint: hello.py:hello_world
+  schedule: {}
+  flow_name: null
+  entrypoint: deployments/download_videos.py:download_videos
   parameters: {}
   work_pool:
-    name: work-pool-1-process
+    name: local-pool
     work_queue_name: null
     job_variables: {}
-  schedules:
-  - interval: 300.0
-    anchor_date: '2026-05-02T02:31:11.946376+00:00'
-    timezone: UTC
-    active: true
+
+- name: extract-transcripts
+  version: null
+  tags: []
+  description: null
+  schedule: {}
+  flow_name: null
+  entrypoint: deployments/extract_transcripts.py:extract_transcripts
+  parameters: {}
+  work_pool:
+    name: local-pool
+    work_queue_name: null
+    job_variables: {}

@@ -11,19 +11,11 @@ class FrameInfo(BaseModel):
     path: str
     categories: dict[str, float] = Field(default_facory=dict)
     
-class CreatorVideo(BaseModel):
+class TranscriptChunk(BaseModel):
+    id: str
+    text: str
+    start_time: float
+    end_time: float
+    segment_ids: list[int]
     video_id: str
-    url: str
-    title: str = ""
-    channel: str = ""
-    channel_id: str = ""
-    duration_sec: float = 0.0
-    upload_date: str = ""
-    description: str = ""
-    view_count: int = 0
-    video_path: str = ""
-    audio_path: str = ""
-    frame_paths: list[str] = Field(default_factory=list)
-    transcript: list[TranscriptSegment] = Field(default_factory=list)
-    frames: list[FrameInfo] = Field(default_factory=list)
-    ingested_at: datetime = Field(default_factory=datetime.now(UTC))
+    

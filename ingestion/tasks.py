@@ -1,52 +1,13 @@
+from prefect import flow, task, get_run_logger
 import csv
-import logging
-import traceback
-from pprint import pprint
-from datetime import datetime, UTC
 import psycopg2
 from psycopg2.extras import execute_values, RealDictCursor
 
-from youtube.channels import get_uploads_playlist_by_handle, get_channel_details_by_handle
-from youtube.videos import get_videos_by_playlist_id
-from models.youtube import Channel, UploadPlaylist, Video
+from models.youtube import Channel, UploadPlaylist
 from db.pg_connect import connect_to_db
-from ingestion.downloader import VideoDownloader, VideoMetadata
+from ingestion.downloader import VideoMetadata
 
-def run_pipeline():
-    """Ingest channel details into PostgreSQL."""
-    # Get the list of channel handles to process
-    channel_handles = get_channels_to_process()
-    pprint(f'channels: {channel_handles}')
-    
-    # Get the channel details for each channel
-    channel_detail_list: list[Channel] = []
-    for handle in channel_handles:
-        channel_detail_list.append(get_channel_details_by_handle(handle))
-        
-    # Load the channel details to Postgres
-    save_channels_to_db(channel_detail_list)
-    
-    # Fetch each channel's videos using the upload_playlist_id
-    upload_playlists = get_upload_playlists()
-    pprint(upload_playlists)
-    
-    # Download videos from each uploads playlist
-    for up in upload_playlists:
-        # Get list of videos by the default upload playlist ID
-        videos = get_videos_by_playlist_id(up.uploads_playlist_id, max_results=2)
-        pprint(videos)
-        
-        # Download the videos
-        processed_video_metadata: list[VideoMetadata] = []
-        for v in videos:
-            dl = VideoDownloader()
-            storage_uri, video_metadata = dl.download(v.url)
-            video_metadata.ingested_at = datetime.now(UTC)
-            processed_video_metadata.append(video_metadata)
-            
-        # Load video metadata to Postgres
-        save_video_metadata_to_db(processed_video_metadata)
-        
+@task
 def get_channels_to_process() -> list[str]:
     """Get channels to process from channels.csv."""
     channels_file = 'channels.csv'
@@ -54,8 +15,11 @@ def get_channels_to_process() -> list[str]:
         reader = csv.DictReader(file)
         return [row['channel_handle'] for row in reader]   
     
-def create_channel_table(conn):
-    print('Ensuring youtube.channels table exists...')
+@task
+def create_channel_table():
+    logger = get_run_logger()
+    logger.info('Ensuring youtube.channels table exists...')
+    conn = connect_to_db()
     try:
         cursor = conn.cursor()
         cursor.execute("""
@@ -68,8 +32,8 @@ def create_channel_table(conn):
                 custom_url TEXT,
                 published_at  TIMESTAMPTZ,
                 thumbnail_url TEXT,
-                view_count INTEGER,
-                subscriber_count INTEGER,
+                view_count BIGINT,
+                subscriber_count BIGINT,
                 hidden_subscriber_count BOOLEAN,
                 video_count INTEGER,
                 uploads_playlist_id TEXT,
@@ -79,14 +43,20 @@ def create_channel_table(conn):
         """)
         conn.commit()
     except psycopg2.Error as e:
-        print(f'Failed to create youtube.channels table: {str(e)}')
+        logger.error(f'Failed to create youtube.channels table: {str(e)}')
         raise
     finally:
         if 'cursor' in locals():
             cursor.close()
+        if 'conn' in locals():
+            conn.close()
+            logger.info('DB connection closed')
             
-def create_video_metadata_table(conn):
-    print('Ensuring youtube.video_metadata table exists...')
+@task
+def create_video_metadata_table():
+    logger = get_run_logger()
+    logger.info('Ensuring youtube.video_metadata table exists...')
+    conn = connect_to_db()
     try:
         cursor = conn.cursor()
         cursor.execute("""
@@ -106,22 +76,30 @@ def create_video_metadata_table(conn):
                 webpage_url TEXT,
                 ext TEXT,
                 storage_uri TEXT,
-                ingested_at TIMESTAMPTZ DEFAULT NOW()
+                ingested_at TIMESTAMPTZ DEFAULT NOW(),
+                transcript TEXT
             )
         """)
         conn.commit()
     except psycopg2.Error as e:
-        print(f'Failed to create youtube.video_metadata table: {str(e)}')
+        logger.error(f'Failed to create youtube.video_metadata table: {str(e)}')
         raise
     finally:
         if 'cursor' in locals():
             cursor.close()
+        if 'conn' in locals():
+            conn.close()
+            logger.info('DB connection closed')
      
-def upsert_video_metadata(conn, video_metadata: list[VideoMetadata]):
+@task
+def upsert_video_metadata(video_metadata: list[VideoMetadata]):
     """
     Insert video_metadata records into Postgres.
     """
-    print("Inserting data into youtube.video_metadata...")
+    logger = get_run_logger()
+    logger.info("Inserting data into youtube.video_metadata...")
+    
+    conn = connect_to_db()
     
     schema_name, table_name = "youtube", "video_metadata"
     unique_id_fields = ["video_id"]
@@ -137,7 +115,7 @@ def upsert_video_metadata(conn, video_metadata: list[VideoMetadata]):
     seen: dict[str, Channel] = {}
     for v in video_metadata:
         if v.video_id in seen:
-            print(f"Warning: duplicate video_id {v.video_id} in source data.")
+            logger.warning(f"Warning: duplicate video_id {v.video_id} in source data.")
         else:
             seen[v.video_id] = v
             
@@ -161,16 +139,24 @@ def upsert_video_metadata(conn, video_metadata: list[VideoMetadata]):
                 values,
             )
         conn.commit()
-        print(f"Upserted {len(values)} channels into {schema_name}.{table_name}")
+        logger.info(f"Upserted {len(values)} channels into {schema_name}.{table_name}")
     except psycopg2.Error as e:
-        print(f"Failed to insert records into {schema_name}.{table_name}: {str(e)}")
+        logger.error(f"Failed to insert records into {schema_name}.{table_name}: {str(e)}")
         raise
+    finally:
+        if 'conn' in locals():
+            conn.close()
+            logger.info('DB connection closed')
             
-def upsert_channels(conn, channels: list[Channel]):
+@task
+def upsert_channels(channels: list[Channel]):
     """
     Insert channel records into Postgres.
     """
-    print("Inserting data into youtube.channels...")
+    logger = get_run_logger()
+    logger.info("Inserting data into youtube.channels...")
+    
+    conn = connect_to_db()
     
     schema_name, table_name = "youtube", "channels"
     unique_id_fields = ["id"]
@@ -186,7 +172,7 @@ def upsert_channels(conn, channels: list[Channel]):
     seen: dict[str, Channel] = {}
     for c in channels:
         if c.id in seen:
-            print(f"Warning: duplicate channel ID {c.id} in source data.")
+            logger.warning(f"Warning: duplicate channel ID {c.id} in source data.")
         else:
             seen[c.id] = c
             
@@ -199,42 +185,57 @@ def upsert_channels(conn, channels: list[Channel]):
     updates = ", ".join(f"{f} = EXCLUDED.{f}" for f in fields if f != "id")
     on_conflict_fields = ", ".join(unique_id_fields)
     try:
-        with conn.cursor() as cursor:
-            execute_values(
-                cursor,
-                f"""
+        sql = f"""
                 INSERT INTO {schema_name}.{table_name} ({columns})
                 VALUES %s
                 ON CONFLICT ({on_conflict_fields}) DO UPDATE SET {updates}
-                """,
+                """
+        logger.info(sql)
+        with conn.cursor() as cursor:
+            execute_values(
+                cursor,
+                sql,
                 values,
             )
         conn.commit()
-        print(f"Upserted {len(values)} channels into {schema_name}.{table_name}")
+        logger.info(f"Upserted {len(values)} channels into {schema_name}.{table_name}")
     except psycopg2.Error as e:
-        print(f"Failed to insert records into {schema_name}.{table_name}: {str(e)}")
+        logger.error(f"Failed to insert records into {schema_name}.{table_name}: {str(e)}")
         raise
+    finally:
+        if 'conn' in locals():
+            conn.close()
+            logger.info('DB connection closed')
      
+@flow
 def save_channels_to_db(channels: list[Channel]):
     """Load channel details to PostgreSQL."""
+    logger = get_run_logger()
+    logger.info('Saving channels to database...')
     conn = connect_to_db()
-    create_channel_table(conn)
-    upsert_channels(conn, channels)
+    create_channel_table()
+    upsert_channels(channels)
     if 'conn' in locals():
         conn.close()
-        print('DB connection closed')
+        logger.info('DB connection closed')
         
+@flow
 def save_video_metadata_to_db(video_metadata: list[VideoMetadata]):
     """Load video metadata to PostgreSQL."""
+    logger = get_run_logger()
+    logger.info('Saving video metadata to database...')
     conn = connect_to_db()
-    create_video_metadata_table(conn)
-    upsert_video_metadata(conn, video_metadata)
+    create_video_metadata_table()
+    upsert_video_metadata(video_metadata)
     if 'conn' in locals():
         conn.close()
-        print('DB connection closed')
+        logger.info('DB connection closed')
     
+@task
 def get_upload_playlists(update_threshold_days: int = 7) -> list[UploadPlaylist]:
     """Query upload playlists for channels that require processing/reprocessing."""
+    logger = get_run_logger()
+    logger.info('Getting upload playlists...')
     upload_playlists: list[UploadPlaylist] = []
     try:
         conn = connect_to_db()
@@ -258,16 +259,9 @@ def get_upload_playlists(update_threshold_days: int = 7) -> list[UploadPlaylist]
             ])
         return upload_playlists
     except psycopg2.Error as e:
-        print(f"Error retrieving upload playlist IDs: {str(e)}")
+        logger.error(f"Error retrieving upload playlist IDs: {str(e)}")
         raise
     finally:
         if 'conn' in locals():
             conn.close()
-            print('DB connection closed')
-            
-    
-if __name__ == '__main__':
-    try:
-        run_pipeline()
-    except Exception as e:
-        logging.error(traceback.format_exc())
+            logger.info('DB connection closed')
