@@ -51,12 +51,14 @@ class VideoDownloader:
         self,
         storage: Optional[StorageBackend] = None,
         tmp_dir: str = "data/tmp",
+        max_duration: Optional[int] = None,  # seconds
     ):
         self.storage = storage or get_storage_backend()
         self.tmp_dir = Path(tmp_dir)
         self.tmp_dir.mkdir(parents=True, exist_ok=True)
+        self.max_duration = max_duration
         
-    def download(self, url: str) -> tuple[str, VideoMetadata]:
+    def download(self, url: str) -> VideoMetadata:
         """
         Download single video.
         
@@ -69,16 +71,22 @@ class VideoDownloader:
         video_id = info["id"]
         ext = "mp4"
 
+        # Skip videos over the max_duration setting
+        duration = info.get("duration") or 0
+        if self.max_duration and duration > self.max_duration:
+            logger.info(f"[{video_id}] {duration}s exceeds limit of {self.max_duration}s — skipping")
+            return None
+
         if self.storage.exists(video_id, ext):
             logger.info(f"[{video_id}] already exists in storage, so skipping download.")
             uri = self.storage.get_uri(video_id, ext)
             metadata = self._parse_metadata(info, uri)
-            return uri, metadata
+            return metadata
         
         uri = self._download_and_store(url, video_id, ext)
         metadata = self._parse_metadata(info, uri)
         logger.info(f"[{video_id}] saved to {uri}")
-        return uri, metadata
+        return metadata
     
     def download_channel(
         self, channel_url: str, max_videos: int = 20

@@ -4,7 +4,7 @@ import psycopg2
 from psycopg2.extras import execute_values, RealDictCursor
 
 from models.youtube import Channel, UploadPlaylist
-from db.pg_connect import connect_to_db
+from db.pg_connect import connect_to_db, db_connection
 from ingestion.downloader import VideoMetadata
 
 @task
@@ -14,16 +14,19 @@ def get_channels_to_process() -> list[str]:
     with open(channels_file, mode='r') as file:
         reader = csv.DictReader(file)
         return [row['channel_handle'] for row in reader]   
-    
+
+
 @task
-def create_channel_table():
+def create_db_tables():
+    """Create tables in 'youtube' schema if they do not exist yet."""
     logger = get_run_logger()
-    logger.info('Ensuring youtube.channels table exists...')
-    conn = connect_to_db()
+    logger.info('Creating tables...')
+    conn = db_connection
     try:
         cursor = conn.cursor()
         cursor.execute("""
             CREATE SCHEMA IF NOT EXISTS youtube;
+            
             CREATE TABLE IF NOT EXISTS youtube.channels (
                 id TEXT PRIMARY KEY,
                 handle TEXT,
@@ -39,28 +42,8 @@ def create_channel_table():
                 uploads_playlist_id TEXT,
                 ingested_at TIMESTAMPTZ DEFAULT NOW(),
                 videos_last_processed TIMESTAMPTZ
-            )
-        """)
-        conn.commit()
-    except psycopg2.Error as e:
-        logger.error(f'Failed to create youtube.channels table: {str(e)}')
-        raise
-    finally:
-        if 'cursor' in locals():
-            cursor.close()
-        if 'conn' in locals():
-            conn.close()
-            logger.info('DB connection closed')
+            );
             
-@task
-def create_video_metadata_table():
-    logger = get_run_logger()
-    logger.info('Ensuring youtube.video_metadata table exists...')
-    conn = connect_to_db()
-    try:
-        cursor = conn.cursor()
-        cursor.execute("""
-            CREATE SCHEMA IF NOT EXISTS youtube;
             CREATE TABLE IF NOT EXISTS youtube.video_metadata (
                 video_id TEXT PRIMARY KEY,
                 title TEXT,
@@ -78,18 +61,25 @@ def create_video_metadata_table():
                 storage_uri TEXT,
                 ingested_at TIMESTAMPTZ DEFAULT NOW(),
                 frames_processed_at TIMESTAMPTZ
-            )
+            );
+            
+            CREATE TABLE IF NOT EXISTS youtube.transcripts (
+                video_id TEXT PRIMARY KEY REFERENCES youtube.video_metadata(video_id),
+                full_text TEXT,
+                language TEXT,
+                segments JSONB,
+                model_name TEXT,
+                transcribed_at TIMESTAMPTZ DEFAULT NOW()
+            );
         """)
         conn.commit()
     except psycopg2.Error as e:
-        logger.error(f'Failed to create youtube.video_metadata table: {str(e)}')
+        logger.error(f'Failed to create tables: {str(e)}')
         raise
     finally:
         if 'cursor' in locals():
             cursor.close()
-        if 'conn' in locals():
-            conn.close()
-            logger.info('DB connection closed')
+
      
 @task
 def upsert_video_metadata(video_metadata: list[VideoMetadata]):
@@ -99,7 +89,7 @@ def upsert_video_metadata(video_metadata: list[VideoMetadata]):
     logger = get_run_logger()
     logger.info("Inserting data into youtube.video_metadata...")
     
-    conn = connect_to_db()
+    conn = db_connection
     
     schema_name, table_name = "youtube", "video_metadata"
     unique_id_fields = ["video_id"]
@@ -143,10 +133,6 @@ def upsert_video_metadata(video_metadata: list[VideoMetadata]):
     except psycopg2.Error as e:
         logger.error(f"Failed to insert records into {schema_name}.{table_name}: {str(e)}")
         raise
-    finally:
-        if 'conn' in locals():
-            conn.close()
-            logger.info('DB connection closed')
             
 @task
 def upsert_channels(channels: list[Channel]):
@@ -156,7 +142,7 @@ def upsert_channels(channels: list[Channel]):
     logger = get_run_logger()
     logger.info("Inserting data into youtube.channels...")
     
-    conn = connect_to_db()
+    conn = db_connection
     
     schema_name, table_name = "youtube", "channels"
     unique_id_fields = ["id"]
@@ -202,43 +188,29 @@ def upsert_channels(channels: list[Channel]):
     except psycopg2.Error as e:
         logger.error(f"Failed to insert records into {schema_name}.{table_name}: {str(e)}")
         raise
-    finally:
-        if 'conn' in locals():
-            conn.close()
-            logger.info('DB connection closed')
      
 @flow
 def save_channels_to_db(channels: list[Channel]):
     """Load channel details to PostgreSQL."""
     logger = get_run_logger()
     logger.info('Saving channels to database...')
-    conn = connect_to_db()
-    create_channel_table()
     upsert_channels(channels)
-    if 'conn' in locals():
-        conn.close()
-        logger.info('DB connection closed')
         
 @flow
 def save_video_metadata_to_db(video_metadata: list[VideoMetadata]):
     """Load video metadata to PostgreSQL."""
     logger = get_run_logger()
     logger.info('Saving video metadata to database...')
-    conn = connect_to_db()
-    create_video_metadata_table()
     upsert_video_metadata(video_metadata)
-    if 'conn' in locals():
-        conn.close()
-        logger.info('DB connection closed')
     
 @task
-def get_upload_playlists(update_threshold_days: int = 7) -> list[UploadPlaylist]:
+def get_upload_playlists_to_process(update_threshold_days: int = 7) -> list[UploadPlaylist]:
     """Query upload playlists for channels that require processing/reprocessing."""
     logger = get_run_logger()
     logger.info('Getting upload playlists...')
     upload_playlists: list[UploadPlaylist] = []
     try:
-        conn = connect_to_db()
+        conn = db_connection
         with conn.cursor('get_upload_playlists', cursor_factory=RealDictCursor) as read_cur:
             read_cur.execute(f"""
                 SELECT
@@ -261,7 +233,57 @@ def get_upload_playlists(update_threshold_days: int = 7) -> list[UploadPlaylist]
     except psycopg2.Error as e:
         logger.error(f"Error retrieving upload playlist IDs: {str(e)}")
         raise
+    
+    
+def video_previously_processed(webpage_url: str) -> bool:
+    """
+    Check if we have already ingested the video/metadata by URL.
+    Videos will be marked as previously processed only if we have ingested the metadata, transcript, and video frames.
+    Used to determine whether to download the video or just reingest metadata from YouTube API.
+    """
+    logger = get_run_logger()
+    
+    try:
+        conn = db_connection
+        with conn.cursor('video_previously_processed', cursor_factory=RealDictCursor) as read_cur:
+            read_cur.execute(f"""
+                SELECT CASE WHEN EXISTS (
+                    SELECT 1
+                    FROM youtube.video_metadata m
+                    LEFT JOIN youtube.transcripts t ON m.video_id = t.video_id
+                    WHERE webpage_url = %s
+                    AND frames_processed_at IS NOT NULL
+                    AND t.video_id IS NOT NULL
+                ) THEN 1 ELSE 0 END as previously_processed; 
+            """, (webpage_url,))
+        
+            # Return first row
+            for row in read_cur:
+                return bool(row['previously_processed'])
+            
+    except psycopg2.Error as e:
+        logger.error(f"Error retrieving upload playlist IDs: {str(e)}")
+        raise
+    
+def update_channel_videos_last_processed(channel_id: str):
+    """
+    Update youtube.channels with videos_last_processed timestamp,
+    after downloading videos and ingesting metadata.
+    """
+    logger = get_run_logger()
+    logger.info(f'Marking channel {channel_id} as recently processed...')
+    conn = db_connection
+    try:
+        cursor = conn.cursor()
+        cursor.execute(f"""
+            UPDATE youtube.channels
+            SET videos_last_processed = NOW()
+            WHERE id = %s;
+        """, (channel_id,))
+        conn.commit()
+    except psycopg2.Error as e:
+        logger.error(f'Failed to mark channel {channel_id} as recently processed: {str(e)}')
+        raise
     finally:
-        if 'conn' in locals():
-            conn.close()
-            logger.info('DB connection closed')
+        if 'cursor' in locals():
+            cursor.close()

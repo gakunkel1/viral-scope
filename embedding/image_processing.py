@@ -51,21 +51,6 @@ class FrameProcessor:
             
             cap.release()
             return np.array(frames), timestamps
-
-        # with self.storage.scoped_local_path(video_id, ext="mp4") as local_path:
-        #     print(local_path)
-        #     vr = VideoReader(local_path, ctx=cpu(0))
-        #     fps = vr.get_avg_fps()
-        #     total_frames = len(vr)
-            
-        #     # One frame per interval_sec seconds
-        #     step = int(fps * interval_sec)
-        #     indices = list(range(0, total_frames, step))
-        #     frames = vr.get_batch(indices).asnumpy()
-            
-        #     # Get timestamps for Qdrant metadata
-        #     timestamps = [i / fps for i in indices]
-        #     return frames, timestamps
         
     def _chunked(self, frames: np.ndarray, batch_size: int = 32):
         """Yield a chunk of frames of the specified batch size."""

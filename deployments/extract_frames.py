@@ -11,11 +11,13 @@ from embedding.tasks import (
     get_unprocessed_frames_videos,
     update_frame_processing_status
 )
+from ingestion.tasks import create_db_tables
 
 load_dotenv()
 
 QDRANT_API_KEY = os.environ['QDRANT_API_KEY']
 QDRANT_URL = os.environ['QDRANT_URL']
+DELETE_AFTER_PROCESSING = os.getenv("DELETE_AFTER_PROCESSING", "false").lower() in ("true", "1", "yes", "y")
     
 @flow(log_prints=True, timeout_seconds=600)
 def extract_frames():
@@ -23,6 +25,9 @@ def extract_frames():
     with concurrency("frame-extraction", occupy=1):
         logger = get_run_logger()
         logger.info("Starting frame extraction pipeline...")
+        
+        # Create 'youtube' schema tables if they don't yet exist
+        create_db_tables()
         
         # Get videos that need their frames processed
         videos = get_unprocessed_frames_videos()
@@ -62,6 +67,11 @@ def extract_frames():
                 
                 # Update frames_processed_at in youtube.video_metadata
                 update_frame_processing_status(v.video_id)
+                
+                # Delete the file if configured to do so post-processing
+                if DELETE_AFTER_PROCESSING and v.transcript_exists:
+                    logger.info(f'Deleting video {v.video_id}')
+                    fp.storage.delete(v.video_id, ext="mp4")
             except Exception as e:
                 logger.warning(f'Skipping {v.video_id}: {e}')
         

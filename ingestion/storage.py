@@ -26,6 +26,10 @@ class StorageBackend(ABC):
         """
         
     @abstractmethod
+    def delete(self, video_id: str, ext: str):
+        """Delete the file if it exists."""
+        
+    @abstractmethod
     def exists(self, video_id: str, ext: str) -> bool:
         """Return True if the video already exists in storage for idempotency."""
         
@@ -67,6 +71,14 @@ class LocalStorage(StorageBackend):
     
     def get_uri(self, video_id: str, ext: str) -> str:
         return str(self._path(video_id, ext))
+    
+    def delete(self, video_id: str, ext: str):
+        try:
+            file_path = self._path(video_id, ext)
+            if file_path.exists():
+                os.remove(file_path)
+        except FileNotFoundError:
+            print('File not found.')
     
     
 class S3Storage(StorageBackend):
@@ -124,6 +136,15 @@ class S3Storage(StorageBackend):
         
     def get_uri(self, video_id: str, ext: str) -> str:
         return f"s3://{self.bucket}/{self._key(video_id, ext)}"
+    
+    def delete(self, video_id: str, ext: str):
+        try:
+            self.client.delete_object(
+                Bucket={self.bucket},
+                Key={self._key(video_id, ext)}
+            )
+        except FileNotFoundError:
+            print('File not found.')
     
     
 def get_storage_backend() -> StorageBackend:

@@ -7,7 +7,7 @@ from datetime import datetime, UTC
 
 from qdrant_client.models import PointStruct
 
-from db.pg_connect import connect_to_db
+from db.pg_connect import connect_to_db, db_connection
 from models.youtube import VideoMetadata
 from models.embeddings import TranscriptChunk
 from embedding.vector_db import make_chunk_id, VectorStore
@@ -83,7 +83,7 @@ def save_transcript(whisper_model: str, video_id: str, transcription_result: dic
     """Save one video transcript to youtube.video_metadata."""
     logger = get_run_logger()
     logger.info(f'Saving transcript for video {video_id}...')
-    conn = connect_to_db()
+    conn = db_connection
     try:
         with conn.cursor() as cur:
             insert_sql = f"""
@@ -104,40 +104,6 @@ def save_transcript(whisper_model: str, video_id: str, transcription_result: dic
     except psycopg2.Error as e:
         logger.error(f"Failed to insert record into youtube.transcripts: {str(e)}")
         raise
-    finally:
-        if 'conn' in locals():
-            conn.close()
-            logger.info('DB connection closed')
-
-@task
-def create_transcripts_table():
-    """Create youtube.transcripts if it doesn't exist yet."""
-    logger = get_run_logger()
-    logger.info('Creating table youtube.transcripts...')
-    conn = connect_to_db()
-    try:
-        cursor = conn.cursor()
-        cursor.execute("""
-            CREATE SCHEMA IF NOT EXISTS youtube;
-            CREATE TABLE IF NOT EXISTS youtube.transcripts (
-                video_id TEXT PRIMARY KEY REFERENCES youtube.video_metadata(video_id),
-                full_text TEXT,
-                language TEXT,
-                segments JSONB,
-                model_name TEXT,
-                transcribed_at TIMESTAMPTZ DEFAULT NOW()
-            );
-        """)
-        conn.commit()
-    except psycopg2.Error as e:
-        logger.error(f'Failed to create youtube.transcripts table: {str(e)}')
-        raise
-    finally:
-        if 'cursor' in locals():
-            cursor.close()
-        if 'conn' in locals():
-            conn.close()
-            logger.info('DB connection closed')
 
 @task
 def get_unprocessed_audio_videos() -> list[VideoMetadata]:
@@ -146,7 +112,7 @@ def get_unprocessed_audio_videos() -> list[VideoMetadata]:
     logger.info('Getting unprocessed videos for transcription...')
     videos_to_process: list[VideoMetadata] = []
     try:
-        conn = connect_to_db()
+        conn = db_connection
         with conn.cursor('get_unprocessed_audio_videos', cursor_factory=RealDictCursor) as read_cur:
             read_cur.execute(f"""
                 SELECT
@@ -193,10 +159,10 @@ def get_unprocessed_audio_videos() -> list[VideoMetadata]:
     except psycopg2.Error as e:
         logger.error(f"Error retrieving video metadata: {str(e)}")
         raise
-    finally:
-        if 'conn' in locals():
-            conn.close()
-            logger.info('DB connection closed')
+    # finally:
+    #     if 'conn' in locals():
+    #         conn.close()
+    #         logger.info('DB connection closed')
             
             
 ###########################################################################
@@ -204,76 +170,47 @@ def get_unprocessed_audio_videos() -> list[VideoMetadata]:
 ###########################################################################
 @task
 def get_unprocessed_frames_videos() -> list[VideoMetadata]:
-    """Retrieve videos from youtube.video_metadata where frames have not yet been processed."""
     logger = get_run_logger()
-    logger.info('Getting unprocessed videos for frame extraction and embedding...')
-    videos_to_process: list[VideoMetadata] = []
+    logger.info('Fetching unprocessed videos...')
+    
+    videos_to_process = []
+    conn = None
     try:
-        conn = connect_to_db()
-        with conn.cursor('get_unprocessed_frames_videos', cursor_factory=RealDictCursor) as read_cur:
-            read_cur.execute(f"""
-                SELECT
-                    vm.video_id,
-                    vm.title,
-                    vm.channel,
-                    vm.channel_id,
-                    vm.duration_seconds,
-                    vm.view_count,
-                    vm.like_count,
-                    vm.comment_count,
-                    vm.upload_date,
-                    vm.description,
-                    vm.tags,
-                    vm.webpage_url,
-                    vm.ext,
-                    vm.storage_uri,
-                    vm.ingested_at
+        conn = db_connection
+        # Using a named cursor for server-side fetching (good for memory)
+        with conn.cursor('video_fetch_cursor', cursor_factory=RealDictCursor) as cur:
+            cur.execute("""
+                SELECT 
+                    vm.*, 
+                    (t.video_id IS NOT NULL) as transcript_exists
                 FROM youtube.video_metadata vm
-                WHERE vm.frames_processed_at IS NULL;             
+                LEFT JOIN youtube.transcripts t ON vm.video_id = t.video_id
+                WHERE vm.frames_processed_at IS NULL;
             """)
-            videos_to_process.extend([
-                VideoMetadata(
-                    video_id=row['video_id'],
-                    title=row['title'],
-                    channel=row['channel'],
-                    channel_id=row['channel_id'],
-                    duration_seconds=row['duration_seconds'],
-                    view_count=row['view_count'],
-                    like_count=row['like_count'],
-                    comment_count=row['comment_count'],
-                    upload_date=row['upload_date'],
-                    description=row['description'],
-                    tags=row['tags'],
-                    webpage_url=row['webpage_url'],
-                    ext=row['ext'],
-                    storage_uri=row['storage_uri'],
-                    ingested_at=row['ingested_at']
-                )
-                for row in read_cur
-            ])
-        return videos_to_process
-    except psycopg2.Error as e:
-        logger.error(f"Error retrieving video metadata: {str(e)}")
-        raise
-    finally:
-        if 'conn' in locals():
-            conn.close()
-            logger.info('DB connection closed')
             
+            # Pydantic v2 model_validate (or VideoMetadata(**row) in v1)
+            # This automatically handles the bool conversion and date parsing
+            for row in cur:
+                videos_to_process.append(VideoMetadata.model_validate(row))
+                
+        return videos_to_process
+
+    except Exception as e:
+        logger.error(f"Failed to retrieve metadata: {e}")
+        raise
             
 def update_frame_processing_status(video_id: str):
     """Update youtube.video_metadata with frames_processed_at timestamp, after processing/embedding."""
     logger = get_run_logger()
     logger.info(f'Marking video {video_id} as processed...')
-    conn = connect_to_db()
+    conn = db_connection
     try:
         cursor = conn.cursor()
         cursor.execute(f"""
             UPDATE youtube.video_metadata
             SET frames_processed_at = NOW()
-            WHERE video_id = '{video_id}'
-            );
-        """)
+            WHERE video_id = %s;
+        """, (video_id,))
         conn.commit()
     except psycopg2.Error as e:
         logger.error(f'Failed to mark video {video_id} as processed: {str(e)}')
@@ -281,6 +218,3 @@ def update_frame_processing_status(video_id: str):
     finally:
         if 'cursor' in locals():
             cursor.close()
-        if 'conn' in locals():
-            conn.close()
-            logger.info('DB connection closed')

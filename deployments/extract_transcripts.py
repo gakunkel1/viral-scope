@@ -7,9 +7,9 @@ from dotenv import load_dotenv
 from embedding.vector_db import VectorStore
 from embedding.tasks import (
     get_unprocessed_audio_videos, save_transcript,
-    chunk_transcript, embed_and_store_chunks,
-    create_transcripts_table
+    chunk_transcript, embed_and_store_chunks
 )
+from ingestion.tasks import create_db_tables
 
 load_dotenv()
 
@@ -28,8 +28,8 @@ def extract_transcripts():
         model = whisper.load_model(WHISPER_MODEL, device=WHISPER_DEVICE)
         logger.info(f'Loaded Whisper model "{WHISPER_MODEL}"...')
         
-        # Create youtube.transcripts if it doesn't exist
-        create_transcripts_table()
+        # Create 'youtube' schema tables if they don't yet exist
+        create_db_tables()
         
         # Get videos that need transcription
         videos = get_unprocessed_audio_videos()
