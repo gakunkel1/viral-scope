@@ -37,3 +37,4 @@ Viral Scope is an AI-powered influencer content intelligence agent that ingests 
 6. prefect deploy --all
 7. prefect gcl create video-ingestion --limit 1
 8. prefect gcl create video-transcription --limit 1
+9. prefect gcl create frame-extraction --limit 1

@@ -31,22 +31,23 @@ def extract_transcripts():
         # Create youtube.transcripts if it doesn't exist
         create_transcripts_table()
         
+        # Get videos that need transcription
         videos = get_unprocessed_audio_videos()
         logger.info(f'Processing {len(videos)} videos...')
         
         # Initialize Qdrant database
         vs = VectorStore(url=QDRANT_URL, api_key=QDRANT_API_KEY)
         
-        #
+        # Create collections if they don't yet exist
         logger.info('Ensuring collections exist...')
         vs.ensure_collections()
         
-        logger.info(videos)
-        for video in videos:
-            logger.info(f'Transcribing video {video.video_id}')
-            result = model.transcribe(video.storage_uri)
-            save_transcript(WHISPER_MODEL, video.video_id, result)
-            chunks = chunk_transcript(video.video_id, result["segments"])
+        logger.info([v.video_id for v in videos])
+        for v in videos:
+            logger.info(f'Transcribing v {v.video_id}')
+            result = model.transcribe(v.storage_uri)
+            save_transcript(WHISPER_MODEL, v.video_id, result)
+            chunks = chunk_transcript(v.video_id, result["segments"])
             embed_and_store_chunks(vs, chunks)
             
         logger.info('Transcription pipeline complete.')

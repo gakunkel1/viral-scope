@@ -49,3 +49,16 @@ deployments:
     name: local-pool
     work_queue_name: null
     job_variables: {}
+
+- name: extract-frames
+  version: null
+  tags: []
+  description: null
+  schedule: {}
+  flow_name: null
+  entrypoint: deployments/extract_frames.py:extract_frames
+  parameters: {}
+  work_pool:
+    name: local-pool
+    work_queue_name: null
+    job_variables: {}

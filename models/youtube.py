@@ -46,3 +46,4 @@ class VideoMetadata(BaseModel):
     ext: str = "mp4"
     storage_uri: str = "" # After saving
     ingested_at: Optional[datetime] = None
+    frames_processed_at: Optional[datetime] = None # After embedding frames

@@ -12,6 +12,10 @@ from models.youtube import VideoMetadata
 from models.embeddings import TranscriptChunk
 from embedding.vector_db import make_chunk_id, VectorStore
 
+###########################################################################
+# TRANSCRIPT
+###########################################################################
+
 @task
 def chunk_transcript(video_id: str, segments: list, max_tokens=200) -> list[TranscriptChunk]:
     """Fixed-length chunking to preserve timestamps."""
@@ -72,7 +76,7 @@ def embed_and_store_chunks(vector_store: VectorStore, chunks: list[TranscriptChu
                 }
             )
         )
-    vector_store.upsert_transcript_chunks(points)
+    vector_store.upsert_chunks(points, 'transcript_chunks')
         
 @task
 def save_transcript(whisper_model: str, video_id: str, transcription_result: dict):
@@ -143,7 +147,7 @@ def get_unprocessed_audio_videos() -> list[VideoMetadata]:
     videos_to_process: list[VideoMetadata] = []
     try:
         conn = connect_to_db()
-        with conn.cursor('get_upload_playlists', cursor_factory=RealDictCursor) as read_cur:
+        with conn.cursor('get_unprocessed_audio_videos', cursor_factory=RealDictCursor) as read_cur:
             read_cur.execute(f"""
                 SELECT
                     vm.video_id,
@@ -195,3 +199,88 @@ def get_unprocessed_audio_videos() -> list[VideoMetadata]:
             logger.info('DB connection closed')
             
             
+###########################################################################
+# FRAMES
+###########################################################################
+@task
+def get_unprocessed_frames_videos() -> list[VideoMetadata]:
+    """Retrieve videos from youtube.video_metadata where frames have not yet been processed."""
+    logger = get_run_logger()
+    logger.info('Getting unprocessed videos for frame extraction and embedding...')
+    videos_to_process: list[VideoMetadata] = []
+    try:
+        conn = connect_to_db()
+        with conn.cursor('get_unprocessed_frames_videos', cursor_factory=RealDictCursor) as read_cur:
+            read_cur.execute(f"""
+                SELECT
+                    vm.video_id,
+                    vm.title,
+                    vm.channel,
+                    vm.channel_id,
+                    vm.duration_seconds,
+                    vm.view_count,
+                    vm.like_count,
+                    vm.comment_count,
+                    vm.upload_date,
+                    vm.description,
+                    vm.tags,
+                    vm.webpage_url,
+                    vm.ext,
+                    vm.storage_uri,
+                    vm.ingested_at
+                FROM youtube.video_metadata vm
+                WHERE vm.frames_processed_at IS NULL;             
+            """)
+            videos_to_process.extend([
+                VideoMetadata(
+                    video_id=row['video_id'],
+                    title=row['title'],
+                    channel=row['channel'],
+                    channel_id=row['channel_id'],
+                    duration_seconds=row['duration_seconds'],
+                    view_count=row['view_count'],
+                    like_count=row['like_count'],
+                    comment_count=row['comment_count'],
+                    upload_date=row['upload_date'],
+                    description=row['description'],
+                    tags=row['tags'],
+                    webpage_url=row['webpage_url'],
+                    ext=row['ext'],
+                    storage_uri=row['storage_uri'],
+                    ingested_at=row['ingested_at']
+                )
+                for row in read_cur
+            ])
+        return videos_to_process
+    except psycopg2.Error as e:
+        logger.error(f"Error retrieving video metadata: {str(e)}")
+        raise
+    finally:
+        if 'conn' in locals():
+            conn.close()
+            logger.info('DB connection closed')
+            
+            
+def update_frame_processing_status(video_id: str):
+    """Update youtube.video_metadata with frames_processed_at timestamp, after processing/embedding."""
+    logger = get_run_logger()
+    logger.info(f'Marking video {video_id} as processed...')
+    conn = connect_to_db()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(f"""
+            UPDATE youtube.video_metadata
+            SET frames_processed_at = NOW()
+            WHERE video_id = '{video_id}'
+            );
+        """)
+        conn.commit()
+    except psycopg2.Error as e:
+        logger.error(f'Failed to mark video {video_id} as processed: {str(e)}')
+        raise
+    finally:
+        if 'cursor' in locals():
+            cursor.close()
+        if 'conn' in locals():
+            conn.close()
+            logger.info('DB connection closed')

@@ -20,7 +20,6 @@ def get_uploads_playlist_by_channel_id(
     
     # execute request
     response = request.execute()
-    pprint(response)
     
     # get uploads from response
     uploads_playlist_id = response['items'][0]['contentDetails']['relatedPlaylists']['uploads']
@@ -66,8 +65,6 @@ def get_channel_details_by_handle(
     
     # save ingestion timestamp
     ingested_at = datetime.now(UTC)
-    
-    pprint(response)
 
     # parse response
     id = response['items'][0]['id']

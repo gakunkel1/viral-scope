@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 # Request best video at 720p or below + best m4a audio, then best single file mp4, then "best"
 # mp4 and 720p offers greatest compatibility and reduces processing overhead
 FORMAT_STRING = (
-    "bestvideo[ext=mp4][height<=720]"
+    "bestvideo[ext=mp4][vcodec^=avc1][height<=720]"
     "+bestaudio[ext=m4a]"
     "/best[ext=mp4][height<=720]"
     "/best"
@@ -158,17 +158,3 @@ class VideoDownloader:
             ext="mp4",
             storage_uri=storage_uri,
         )
-    
-
-if __name__ == "__main__":
-    import json
-    import sys
- 
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
- 
-    url = sys.argv[1] if len(sys.argv) > 1 else "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
-    dl = VideoDownloader()
-    uri, meta = dl.download(url)
- 
-    print(f"\nStored at: {uri}")
-    print(json.dumps(meta.__dict__, indent=2))

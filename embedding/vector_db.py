@@ -5,7 +5,12 @@ from pathlib import Path
 import uuid
 from datetime import datetime
 from qdrant_client import QdrantClient
-from qdrant_client.models import Distance, Vector, CollectionsResponse, PointStruct, VectorParams, Batch
+from qdrant_client.models import (
+    Distance, Vector, CollectionsResponse,
+    PointStruct, VectorParams, Batch,
+    ScalarQuantization, ScalarQuantizationConfig,
+    ScalarType
+)
 from langchain_huggingface import HuggingFaceEmbeddings
 
 from models.embeddings import TranscriptChunk
@@ -33,16 +38,21 @@ class VectorStore:
         },
         'video_frames': {
             'size': 512,
-            'distance': Distance.COSINE
+            'distance': Distance.COSINE,
+            'quantization_config': ScalarQuantization(
+                scalar=ScalarQuantizationConfig(
+                    type=ScalarType.INT8,
+                    quantile=0.99,
+                    always_ram=True
+                )
+            )
         }
     }
     
     def __init__(self, url: str, api_key: str):
         model_name = self.COLLECTIONS['transcript_chunks']['model']
         self.embeddings = HuggingFaceEmbeddings(model_name=model_name)
-        
         self.client = QdrantClient(url=url, api_key=api_key)
-        
         logger.info(f"VectorStore initialized: Qdrant at URL {url}")
         
     def ensure_collections(self):
@@ -55,7 +65,8 @@ class VectorStore:
                     vectors_config=VectorParams(
                         size=config['size'],
                         distance=config['distance']
-                    )
+                    ),
+                    quantization_config=config.get('quantization_config')
                 )
                 
     def embed_transcript_chunk(self, text: str) -> Vector:
@@ -63,9 +74,9 @@ class VectorStore:
         result = self.embeddings.embed_query(text)
         return result
         
-    def upsert_transcript_chunks(self, points: list[PointStruct], ):
+    def upsert_chunks(self, points: list[PointStruct], collection_name: str):
         """Add (or update by ID) the chunks into the Qdrant collection."""
         self.client.upsert(
-            collection_name='transcript_chunks',
+            collection_name=collection_name,
             points=points
         )

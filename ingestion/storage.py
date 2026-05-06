@@ -2,6 +2,8 @@ import os
 import logging
 from abc import ABC, abstractmethod
 from pathlib import Path
+from contextlib import contextmanager
+import tempfile
 
 import boto3
 from botocore.exceptions import ClientError
@@ -31,6 +33,11 @@ class StorageBackend(ABC):
     def get_uri(self, video_id: str, ext: str) -> str:
         """Return the URI for an existing video from storage without downloading."""
         
+    @contextmanager
+    @abstractmethod
+    def scoped_local_path(self, video_id: str, ext: str):
+        yield str(self._path(video_id, ext))
+        
 
 class LocalStorage(StorageBackend):
     """
@@ -41,6 +48,10 @@ class LocalStorage(StorageBackend):
         self.base_dir = Path(base_dir)
         self.base_dir.mkdir(parents=True, exist_ok=True)
         logger.info(f"LocalStorage initialized at {self.base_dir.resolve()}")
+        
+    @contextmanager
+    def scoped_local_path(self, video_id: str, ext: str):
+        yield str(self._path(video_id, ext))
         
     def _path(self, video_id: str, ext: str) -> Path:
         return self.base_dir / f"{video_id}.{ext}"
@@ -77,6 +88,14 @@ class S3Storage(StorageBackend):
         self.prefix = prefix.rstrip("/") + "/"
         self.client = boto3.client("s3")
         logger.info(f"S3Storage initialized: s3://{self.bucket}/{self.prefix}")
+        
+    @contextmanager
+    def scoped_local_path(self, video_id, ext):
+        key = self._key(video_id, ext)
+        # Create a temp file that is deleted when the context exits
+        with tempfile.NamedTemporaryFile(suffix=f".{ext}") as tmp:
+            self.client.download_file(self.bucket, key, tmp.name)
+            yield tmp.name
         
     def _key(self, video_id: str, ext: str) -> str:
         return f"{self.prefix}{video_id}.{ext}"

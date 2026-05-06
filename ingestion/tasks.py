@@ -77,7 +77,7 @@ def create_video_metadata_table():
                 ext TEXT,
                 storage_uri TEXT,
                 ingested_at TIMESTAMPTZ DEFAULT NOW(),
-                transcript TEXT
+                frames_processed_at TIMESTAMPTZ
             )
         """)
         conn.commit()
